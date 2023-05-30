@@ -18,20 +18,20 @@ KAFKA_ADDR = "159.89.47.231:9092"
 KAFKA_TOPIC = "log-events"
 CHECKPOINT_PATH = f"dbfs:/stream-checkpoints/kafka/{KAFKA_TOPIC}"
 OUTPUT_PATH = f"dbfs:/tmp/test999"
-CHECKPOINT_PATH_HADOOP = f"hdfs:/kafka/parquet/checkpoint"
+CHECKPOINT_PATH_HADOOP = f"/kafka/parquet/checkpoint"
 HDFS_HOST = "hdfs://localhost:9000"
 
-def main():
-  df = (
-    create_read_stream()
-    .writeStream
-    .trigger(availableNow=True)
-    .option("checkpointLocation", CHECKPOINT_PATH_HADOOP)
-    .foreachBatch(process_micro_Batch)
-    .start()
-  )
+# def main():
+#   df = (
+#     create_read_stream()
+#     .writeStream
+#     .trigger(availableNow=True)
+#     .option("checkpointLocation", CHECKPOINT_PATH_HADOOP)
+#     .foreachBatch(process_micro_Batch)
+#     .start()
+#   )
 
-  df = df.selectExpr("CAST(value as STRING)")
+#   df = df.selectExpr("CAST(value as STRING)")
   
 def create_read_stream():
   return (
@@ -41,18 +41,9 @@ def create_read_stream():
     .option("kafka.bootstrap.servers", KAFKA_ADDR)
     .option("subscribe", KAFKA_TOPIC)
     .option("startingOffsets", "earliest")
+    .option("maxOffsetsPerTrigger", "10")
     .load()
   )
-  
-def process_micro_batch(df, batch_id):
-  print("")
-  
-def to_parquet(df):
-  output = "/Users/sandy/Desktop/COEN242/BigData_Project/PA3"
-  p_df = df.writeStream.format("parquet").outputMode("append").option("checkpointLocation", CHECKPOINT_PATH)
-  
-  p_df.start(output_path)
-  
   
   
 def with_parsed_fields(df_logs):
@@ -75,58 +66,87 @@ def with_parsed_fields(df_logs):
         F.regexp_extract('value', content_size_pattern, 1).cast('integer').alias('content_size')
     )
 
+def process_micro_batch(df, batch_id):
+    # start the stream
+    (
+      df
+      .withColumn("value", F.col("value").cast("string"))
+    #   .writeStream
+    #   .format("console")
+    #   .start()
+    #   .awaitTermination()
+    )
+  
+    logs_df = df.select(df['value'])
+    parse_df = with_parsed_fields(logs_df)
+
+    (
+      parse_df
+      .write
+      .mode("append")
+      .parquet("hdfs://localhost:9000/kafka/parquet_43mb")
+    )
+
+    
+
 if __name__ == '__main__':
 #   main()
   spark = (
     SparkSession
     .builder
-
     .config("spark.executor.memory", "1g")
     .config("spark.driver.memory", "4g")
     .appName("KafkaConsumer")
     .getOrCreate()
   )
+
   spark.sparkContext.setLogLevel("WARN")
   df = create_read_stream()
 
 #   def process_micro_batch(df, batch_id):
 #     (
 #       df
-#       .writeStream
+#       .write
 #       .mode("append")
 #       .parquet("hdfs://localhost:9000/kafka/parquet1")
 #     )
-#   (
-#     df
-#     .writeStream
-#     .foreachBatch(process_micro_batch)
-#     .start()
-#     # .awaitTermination()
-#   )
+
   
   # start the stream
-  (
-    df
-    .withColumn("value", F.col("value").cast("string"))
+#   (
+    # df
+    # .withColumn("value", F.col("value").cast("string"))
     # .writeStream
     # .format("console")
     # .start()
     # .awaitTermination()
-  )
+#   )
   
-  logs_df = df.select(df['value'])
-  parse_df = with_parsed_fields(logs_df)
+#   logs_df = df.select(df['value'])
+#   parse_df = with_parsed_fields(logs_df)
 
 #   process_micro_batch(parse_df, 1)
-
   (
-    parse_df
+    df
     .writeStream
-    .format("console")
+    .trigger(processingTime='10 seconds')
+    .foreachBatch(process_micro_batch)
+    .option("checkpointLocation", 'hdfs://localhost:9000/kafka/parquet/checkpoint')
     .start()
     .awaitTermination()
   )
 
+  
+
+#   (
+#     parse_df
+#     .writeStream
+#     .format("console")
+#     .start()
+#     .awaitTermination()
+#   )
+
 #   read parquet files
 #   parquet_df = spark.read.parquet("hdfs://localhost:9000/kafka/parquet_files/part-00000-f41a12de-4bb2-4591-afd5-e15a239f565b-c000.snappy.parquet")
 #   parquet_df.show()
+
